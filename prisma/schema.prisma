@@ -1,0 +1,271 @@
+// Invoice Generator — Prisma schema
+// Mirrors documentation §6 Database Schema.
+// NOTE: SQLite does not support Prisma enums; discriminators are Strings
+// constrained by TypeScript union types in src/lib/types.ts.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// ────────────────────────────── Company / Entity ─────────────────────────────
+
+model Entity {
+  id              String   @id @default(cuid())
+  name            String
+  legalName       String?
+  taxId           String?
+  address         String?
+  email           String?
+  phone           String?
+  website         String?
+  defaultCurrency String   @default("USD")
+  bankDetails     String?
+  invoicePrefix   String   @default("INV-{YEAR}-{SEQ}")
+  seqPad          Int      @default(4)
+  footerText      String?
+  defaultTerms    String?
+  defaultNotes    String?
+  primaryColor    String   @default("#2563eb")
+
+  clients           Client[]
+  products          Product[]
+  taxRates          TaxRate[]
+  invoices          Invoice[]
+  recurringProfiles RecurringProfile[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CurrencyRate {
+  code       String   @id // ISO-4217, e.g. USD
+  symbol     String
+  name       String
+  rateToBase Float // base-currency units per 1 unit of this currency
+  updatedAt  DateTime @updatedAt @default(now())
+}
+
+// ────────────────────────────── Catalog ──────────────────────────────────────
+
+model Client {
+  id              String  @id @default(cuid())
+  entityId        String
+  entity          Entity  @relation(fields: [entityId], references: [id])
+  name            String
+  email           String?
+  phone           String?
+  billingAddress  String?
+  shippingAddress String?
+  taxId           String?
+  currency        String  @default("USD")
+  notes           String?
+
+  invoices          Invoice[]
+  recurringProfiles RecurringProfile[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([entityId])
+}
+
+model Product {
+  id             String   @id @default(cuid())
+  entityId       String
+  entity         Entity   @relation(fields: [entityId], references: [id])
+  name           String
+  description    String?
+  unitPriceCents Int
+  taxRateId      String?
+  taxRate        TaxRate? @relation(fields: [taxRateId], references: [id])
+  active         Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([entityId])
+}
+
+model TaxRate {
+  id          String @id @default(cuid())
+  entityId    String
+  entity      Entity @relation(fields: [entityId], references: [id])
+  name        String
+  ratePercent Float
+  region      String?
+  type        String @default("EXCLUSIVE") // INCLUSIVE | EXCLUSIVE
+
+  products Product[]
+  items    InvoiceItem[]
+
+  createdAt DateTime @default(now())
+
+  @@index([entityId])
+}
+
+// ────────────────────────────── Invoicing ────────────────────────────────────
+
+model Invoice {
+  id                 String    @id @default(cuid())
+  entityId           String
+  entity             Entity    @relation(fields: [entityId], references: [id])
+  clientId           String
+  client             Client    @relation(fields: [clientId], references: [id])
+  invoiceNumber      String    @unique
+  sequence           Int
+  status             String    @default("DRAFT") // DRAFT|SENT|VIEWED|PARTIALLY_PAID|PAID|OVERDUE|VOID
+  issueDate          DateTime
+  dueDate            DateTime
+  currency           String
+  exchangeRate       Float // locked snapshot at creation (doc §12)
+  discountType       String? // PERCENT | FIXED
+  discountValue      Float?
+  subtotalCents      Int
+  discountTotalCents Int       @default(0)
+  taxTotalCents      Int
+  grandTotalCents    Int
+  amountPaidCents    Int       @default(0)
+  creditedCents      Int       @default(0)
+  notes              String?
+  terms              String?
+  poNumber           String?
+  customFields       Json?
+  sentAt             DateTime?
+  viewedAt           DateTime?
+  voidedAt           DateTime?
+
+  recurringProfileId String?
+  recurringProfile   RecurringProfile? @relation(fields: [recurringProfileId], references: [id])
+
+  items       InvoiceItem[]
+  payments    Payment[]
+  creditNotes CreditNote[]
+  reminders   Reminder[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([entityId, status])
+  @@index([clientId])
+  @@index([dueDate])
+}
+
+model InvoiceItem {
+  id                 String   @id @default(cuid())
+  invoiceId          String
+  invoice            Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  productId          String?
+  description        String
+  quantity           Float
+  unitPriceCents     Int
+  taxRateId          String?
+  taxRate            TaxRate? @relation(fields: [taxRateId], references: [id])
+  taxRateName        String?
+  taxRatePercent     Float    @default(0)
+  taxType            String   @default("EXCLUSIVE") // INCLUSIVE | EXCLUSIVE
+  discountShareCents Int      @default(0)
+  netCents           Int // quantity * unitPrice - discountShare
+  taxCents           Int      @default(0)
+  lineTotalCents     Int
+
+  createdAt DateTime @default(now())
+
+  @@index([invoiceId])
+}
+
+model Payment {
+  id               String   @id @default(cuid())
+  invoiceId        String
+  invoice          Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amountCents      Int
+  currency         String
+  method           String   @default("BANK_TRANSFER") // CASH|CHEQUE|BANK_TRANSFER|CARD|ONLINE
+  gatewayReference String?
+  note             String?
+  paidAt           DateTime
+  createdAt        DateTime @default(now())
+
+  @@index([invoiceId])
+}
+
+model CreditNote {
+  id           String   @id @default(cuid())
+  invoiceId    String
+  invoice      Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  creditNumber String   @unique
+  amountCents  Int
+  reason       String?
+  issuedAt     DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([invoiceId])
+}
+
+// ────────────────────────────── Automation ───────────────────────────────────
+
+model RecurringProfile {
+  id              String    @id @default(cuid())
+  entityId        String
+  entity          Entity    @relation(fields: [entityId], references: [id])
+  clientId        String
+  client          Client    @relation(fields: [clientId], references: [id])
+  title           String
+  basisInvoiceId  String?
+  frequency       String    @default("MONTHLY") // WEEKLY|MONTHLY|QUARTERLY|ANNUALLY|CUSTOM_DAYS
+  intervalDays    Int? // for CUSTOM_DAYS
+  nextRunDate     DateTime
+  autoSend        Boolean   @default(true)
+  endCycles       Int? // null = unlimited
+  endDate         DateTime? // null = unlimited
+  cyclesRun       Int       @default(0)
+  active          Boolean   @default(true)
+  lastGeneratedAt DateTime?
+  itemsJson       String // JSON array of line-item definitions
+  currency        String    @default("USD")
+
+  invoices Invoice[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active, nextRunDate])
+}
+
+model Reminder {
+  id          String    @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  type        String // BEFORE_DUE_3|ON_DUE|OVERDUE_7|OVERDUE_14|OVERDUE_30|AD_HOC
+  channel     String    @default("EMAIL") // EMAIL|SMS
+  subject     String
+  body        String
+  scheduledAt DateTime
+  sentAt      DateTime?
+  status      String    @default("PENDING") // PENDING|SENT|CANCELLED
+  createdAt   DateTime  @default(now())
+
+  @@index([status, scheduledAt])
+  @@index([invoiceId])
+}
+
+// ────────────────────────────── Audit ────────────────────────────────────────
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  entityType  String // INVOICE|CLIENT|PRODUCT|TAX_RATE|PAYMENT|CREDIT_NOTE|RECURRING_PROFILE|REMINDER|SETTINGS
+  entityId    String
+  actor       String   @default("system")
+  action      String   @default("CREATE") // CREATE|UPDATE|DELETE|SEND|VIEW|VOID|PAYMENT_RECORDED|GENERATE|DISPATCH
+  summary     String
+  changesJson String?
+  timestamp   DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([timestamp])
+}
+
