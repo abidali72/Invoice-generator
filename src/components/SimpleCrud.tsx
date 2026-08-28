@@ -42,8 +42,7 @@ export function SimpleCrud<Row extends { id: string }>({
   const { data, error, loading, refetch } = useApi<Row[]>(endpoint);
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<Partial<Row>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -51,16 +50,15 @@ export function SimpleCrud<Row extends { id: string }>({
     setEditingId(null);
     setForm(Object.fromEntries(
       fields.map((f) => [f.key, f.kind === "select" ? (f.options?.[0]?.value ?? "") : ""])
-    ));
+    ) as Partial<Row>);
     setFormError(null);
     setOpen(true);
   }
 
   function openEdit(row: Row) {
     setEditingId(row.id);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rec = row as any;
-    setForm(Object.fromEntries(fields.map((f) => [f.key, rec[f.key] ?? ""])));
+    const rec = row as Record<string, unknown>;
+    setForm(Object.fromEntries(fields.map((f) => [f.key, rec[f.key] ?? ""])) as Partial<Row>);
     setFormError(null);
     setOpen(true);
   }
@@ -91,7 +89,7 @@ export function SimpleCrud<Row extends { id: string }>({
   }
 
   function valid() {
-    return fields.every((f) => !f.required || String(form[f.key] ?? "").trim().length > 0);
+    return fields.every((f) => !f.required || String(form[f.key as keyof Row] ?? "").trim().length > 0);
   }
 
   return (
@@ -148,19 +146,19 @@ export function SimpleCrud<Row extends { id: string }>({
           {fields.map((f) => (
             <Field key={f.key} label={`${f.label}${f.required ? " *" : ""}`} className={f.span === 2 ? "sm:col-span-2" : ""}>
               {f.kind === "textarea" ? (
-                <textarea className="input" rows={3} value={form[f.key] ?? ""}
+                <textarea className="input" rows={3} value={String(form[f.key as keyof Row] ?? "")}
                   placeholder={f.placeholder}
-                  onChange={(e) => setForm((s: Record<string, unknown>) => ({ ...s, [f.key]: e.target.value }))} />
+                  onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))} />
               ) : f.kind === "select" ? (
-                <select className="input" value={form[f.key] ?? ""}
-                  onChange={(e) => setForm((s: Record<string, unknown>) => ({ ...s, [f.key]: e.target.value }))}>
+                <select className="input" value={String(form[f.key as keyof Row] ?? "")}
+                  onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))}>
                   {f.options?.map((o) => (<option key={o.value} value={o.value}>{o.label}</option>))}
                 </select>
               ) : (
                 <input className="input" type={f.kind === "number" ? "number" : f.kind === "email" ? "email" : "text"}
                   step={f.kind === "number" ? "any" : undefined}
-                  value={form[f.key] ?? ""} placeholder={f.placeholder}
-                  onChange={(e) => setForm((s: Record<string, unknown>) => ({ ...s, [f.key]: e.target.value }))} />
+                  value={String(form[f.key as keyof Row] ?? "")} placeholder={f.placeholder}
+                  onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))} />
               )}
             </Field>
           ))}
