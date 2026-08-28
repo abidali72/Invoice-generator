@@ -42,8 +42,7 @@ export function SimpleCrud<Row extends { id: string }>({
   const { data, error, loading, refetch } = useApi<Row[]>(endpoint);
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<Record<string, unknown>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -58,8 +57,7 @@ export function SimpleCrud<Row extends { id: string }>({
 
   function openEdit(row: Row) {
     setEditingId(row.id);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rec = row as any;
+    const rec = row as Record<string, unknown>;
     setForm(Object.fromEntries(fields.map((f) => [f.key, rec[f.key] ?? ""])));
     setFormError(null);
     setOpen(true);
@@ -148,18 +146,18 @@ export function SimpleCrud<Row extends { id: string }>({
           {fields.map((f) => (
             <Field key={f.key} label={`${f.label}${f.required ? " *" : ""}`} className={f.span === 2 ? "sm:col-span-2" : ""}>
               {f.kind === "textarea" ? (
-                <textarea className="input" rows={3} value={form[f.key] ?? ""}
+                <textarea className="input" rows={3} value={(form[f.key] as string | number | undefined) ?? ""}
                   placeholder={f.placeholder}
                   onChange={(e) => setForm((s: Record<string, unknown>) => ({ ...s, [f.key]: e.target.value }))} />
               ) : f.kind === "select" ? (
-                <select className="input" value={form[f.key] ?? ""}
+                <select className="input" value={(form[f.key] as string | number | undefined) ?? ""}
                   onChange={(e) => setForm((s: Record<string, unknown>) => ({ ...s, [f.key]: e.target.value }))}>
                   {f.options?.map((o) => (<option key={o.value} value={o.value}>{o.label}</option>))}
                 </select>
               ) : (
                 <input className="input" type={f.kind === "number" ? "number" : f.kind === "email" ? "email" : "text"}
                   step={f.kind === "number" ? "any" : undefined}
-                  value={form[f.key] ?? ""} placeholder={f.placeholder}
+                  value={(form[f.key] as string | number | undefined) ?? ""} placeholder={f.placeholder}
                   onChange={(e) => setForm((s: Record<string, unknown>) => ({ ...s, [f.key]: e.target.value }))} />
               )}
             </Field>
