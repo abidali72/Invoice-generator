@@ -35,6 +35,8 @@ export async function runDueProfiles(now = new Date()) {
     let generated = 0;
     let cursor = new Date(profile.nextRunDate);
     let guard = 0;
+    let exhausted = false;
+    let cyclesRun = profile.cyclesRun;
 
     while (
       cursor <= now &&
@@ -49,19 +51,9 @@ export async function runDueProfiles(now = new Date()) {
         profile.frequency as RecurringFrequency,
         profile.intervalDays
       );
-      const cyclesRun = profile.cyclesRun + generated;
-      const exhausted =
-        profile.endCycles != null && cyclesRun >= profile.endCycles ? true : undefined;
-
-      await prisma.recurringProfile.update({
-        where: { id: profile.id },
-        data: {
-          nextRunDate: cursor,
-          cyclesRun,
-          lastGeneratedAt: new Date(),
-          ...(exhausted ? { active: false } : {}),
-        },
-      });
+      cyclesRun = profile.cyclesRun + generated;
+      exhausted =
+        profile.endCycles != null && cyclesRun >= profile.endCycles;
 
       await audit({
         entityType: "RECURRING_PROFILE",
@@ -74,6 +66,34 @@ export async function runDueProfiles(now = new Date()) {
 
       if (exhausted || cursor > now) break;
       guard += 1;
+    }
+
+    let active = true;
+
+    if (generated > 0) {
+      if (exhausted) {
+        active = false;
+      } else if (profile.endDate && profile.endDate < now) {
+        active = false;
+      }
+
+      await prisma.recurringProfile.update({
+        where: { id: profile.id },
+        data: {
+          nextRunDate: cursor,
+          cyclesRun,
+          lastGeneratedAt: new Date(),
+          active,
+        },
+      });
+
+      const deactivated = !active;
+      results.push({
+        profile: profile.title,
+        generated,
+        ...(deactivated ? { deactivated: true } : {}),
+      });
+      continue;
     }
 
     // endDate passed without explicit exhaustion ⇒ auto-deactivate
