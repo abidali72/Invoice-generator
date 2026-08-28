@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/prisma";
 import type { Invoice } from "@prisma/client";
-import { audit } from "@/lib/audit";
 import { formatMoney } from "@/lib/money";
 
 const DAY = 86_400_000;
@@ -81,28 +80,56 @@ export async function dispatchDueReminders(now = new Date()) {
     take: 200,
   });
 
-  let sent = 0;
+  if (pending.length === 0) return 0;
+
+  const toCancelIds: string[] = [];
+  const toSend: typeof pending = [];
+
   for (const r of pending) {
     if (!OPEN_STATUSES.includes(r.invoice.status)) {
-      await prisma.reminder.update({
-        where: { id: r.id },
-        data: { status: "CANCELLED" }, // paid/void in the meantime
-      });
-      continue;
+      toCancelIds.push(r.id);
+    } else {
+      toSend.push(r);
     }
-    await prisma.reminder.update({
-      where: { id: r.id },
-      data: { status: "SENT", sentAt: now },
-    });
-    await audit({
-      entityType: "REMINDER",
-      entityId: r.id,
-      action: "DISPATCH",
-      summary: `${r.type} reminder "${r.subject}" e-mailed for ${r.invoice.invoiceNumber}`,
-    });
-    sent += 1;
   }
-  return sent;
+
+  const transactions: any[] = [];
+
+  if (toCancelIds.length > 0) {
+    transactions.push(
+      prisma.reminder.updateMany({
+        where: { id: { in: toCancelIds } },
+        data: { status: "CANCELLED" },
+      })
+    );
+  }
+
+  if (toSend.length > 0) {
+    const toSendIds = toSend.map((r) => r.id);
+    transactions.push(
+      prisma.reminder.updateMany({
+        where: { id: { in: toSendIds } },
+        data: { status: "SENT", sentAt: now },
+      })
+    );
+    transactions.push(
+      prisma.auditLog.createMany({
+        data: toSend.map((r) => ({
+          entityType: "REMINDER",
+          entityId: r.id,
+          actor: "admin@acme.studio",
+          action: "DISPATCH",
+          summary: `${r.type} reminder "${r.subject}" e-mailed for ${r.invoice.invoiceNumber}`,
+        })),
+      })
+    );
+  }
+
+  if (transactions.length > 0) {
+    await prisma.$transaction(transactions);
+  }
+
+  return toSend.length;
 }
 
 export async function cancelPendingReminders(invoiceId: string) {
