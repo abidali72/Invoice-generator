@@ -64,9 +64,14 @@ export function InvoiceForm({
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const preview = useMemo(() => {
+    const taxRateMap = new Map<string, TaxOpt>();
+    for (const tr of taxRates) {
+      taxRateMap.set(tr.id, tr);
+    }
+
     return computeInvoice(
       lines.map((l) => {
-        const tr = taxRates.find((t) => t.id === l.taxRateId);
+        const tr = taxRateMap.get(l.taxRateId);
         return {
           quantity: parseFloat(l.quantity) || 0,
           unitPriceCents: Math.round((parseFloat(l.unitPrice.replace(/,/g, "")) || 0) * 100),
