@@ -1,0 +1,3 @@
+## 2025-05-18 - Database Query Projections for Report Aggregations
+**Learning:** In Prisma ORM applications, calling `findMany()` without explicit `select` projections loads all columns (including large text fields like `notes`, `terms`, and `poNumber`). For dashboard reporting endpoints that query invoices across multiple dimensions, fetching unneeded text columns inflates database network payloads, memory usage, and ORM object instantiation time.
+**Action:** Always specify explicit `select` projections for report and dashboard aggregation functions to retrieve only the minimal scalar fields required.
