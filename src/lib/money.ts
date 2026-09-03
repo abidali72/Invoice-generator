@@ -139,12 +139,26 @@ export function clamp(n: number, min: number, max: number): number {
 
 /* ───────────────────────────── formatting ─────────────────────────────── */
 
-export function formatMoney(cents: number, code = "USD", locale = "en-US"): string {
-  try {
-    return new Intl.NumberFormat(locale, {
+// Bolt ⚡ Optimization: Cache Intl.NumberFormat instances by `${locale}:${code}`
+// Creating Intl.NumberFormat instances repeatedly in loops/render cycles is expensive.
+const numberFormatCache = new Map<string, Intl.NumberFormat>();
+
+function getNumberFormatter(locale: string, code: string): Intl.NumberFormat {
+  const key = `${locale}:${code}`;
+  let fmt = numberFormatCache.get(key);
+  if (!fmt) {
+    fmt = new Intl.NumberFormat(locale, {
       style: "currency",
       currency: code,
-    }).format(cents / 100);
+    });
+    numberFormatCache.set(key, fmt);
+  }
+  return fmt;
+}
+
+export function formatMoney(cents: number, code = "USD", locale = "en-US"): string {
+  try {
+    return getNumberFormatter(locale, code).format(cents / 100);
   } catch {
     return `${code} ${(cents / 100).toFixed(2)}`;
   }

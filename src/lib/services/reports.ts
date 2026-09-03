@@ -4,6 +4,11 @@ import { daysBetween } from "@/lib/dateMath";
 
 const OPEN_FOR_AGG = ["SENT", "VIEWED", "PARTIALLY_PAID", "OVERDUE"] as const;
 
+type OpenInvoiceForExposure = Pick<
+  Invoice,
+  "currency" | "grandTotalCents" | "amountPaidCents" | "creditedCents" | "exchangeRate"
+>;
+
 /** Base-currency conversion uses each invoice's LOCKED rate snapshot (§12). */
 function toBase(cents: number, inv: Pick<Invoice, "exchangeRate">) {
   return Math.round(cents * inv.exchangeRate);
@@ -25,12 +30,19 @@ export interface AgingRow {
 }
 
 /** §14 Accounts-Receivable aging across open invoices. */
-export async function getAging(now = new Date()): Promise<AgingRow[]> {
-  const invoices = await prisma.invoice.findMany({
-    where: { status: { in: [...OPEN_FOR_AGG] } },
-    include: { client: { select: { name: true } } },
-    orderBy: { dueDate: "asc" },
-  });
+export async function getAging(
+  now = new Date(),
+  preloadedOpenInvoices?: Array<Invoice & { client: { name: string } }>
+): Promise<AgingRow[]> {
+  // Bolt ⚡ Optimization: Allow reusing preloaded open-invoices query
+  const invoices =
+    preloadedOpenInvoices ??
+    (await prisma.invoice.findMany({
+      where: { status: { in: [...OPEN_FOR_AGG] } },
+      include: { client: { select: { name: true } } },
+      orderBy: { dueDate: "asc" },
+    }));
+
   return invoices
     .map((inv) => {
       const bal = balance(inv);
@@ -64,7 +76,17 @@ export interface Summary {
 
 /** Dashboard KPIs — all figures in base currency via locked FX snapshots. */
 export async function getSummary(now = new Date()): Promise<Summary> {
-  const allInvoices = await prisma.invoice.findMany();
+  // Bolt ⚡ Optimization: Select only required scalar columns to reduce query payload & memory footprint
+  const allInvoices = await prisma.invoice.findMany({
+    select: {
+      grandTotalCents: true,
+      amountPaidCents: true,
+      creditedCents: true,
+      status: true,
+      dueDate: true,
+      exchangeRate: true,
+    },
+  });
 
   let invoiced = 0;
   let paid = 0;
@@ -124,10 +146,15 @@ export async function getMonthlyRevenue(monthsBack = 12, now = new Date()) {
   const [invoices, payments] = await Promise.all([
     prisma.invoice.findMany({
       where: { issueDate: { gte: start }, status: { notIn: ["DRAFT", "VOID"] } },
+      select: { issueDate: true, grandTotalCents: true, exchangeRate: true },
     }),
     prisma.payment.findMany({
       where: { paidAt: { gte: start } },
-      include: { invoice: { select: { exchangeRate: true } } },
+      select: {
+        paidAt: true,
+        amountCents: true,
+        invoice: { select: { exchangeRate: true } },
+      },
     }),
   ]);
 
@@ -155,7 +182,12 @@ function ymOf(d: Date): string {
 export async function getTopClients(limit = 5) {
   const invoices = await prisma.invoice.findMany({
     where: { status: { notIn: ["DRAFT", "VOID"] } },
-    include: { client: { select: { name: true } } },
+    select: {
+      clientId: true,
+      grandTotalCents: true,
+      exchangeRate: true,
+      client: { select: { name: true } },
+    },
   });
   const agg = new Map<string, { clientId: string; name: string; baseCents: number; count: number }>();
   for (const inv of invoices) {
@@ -168,10 +200,22 @@ export async function getTopClients(limit = 5) {
   return [...agg.values()].sort((a, b) => b.baseCents - a.baseCents).slice(0, limit);
 }
 
-export async function getCurrencyExposure() {
-  const invoices = await prisma.invoice.findMany({
-    where: { status: { in: [...OPEN_FOR_AGG] } },
-  });
+export async function getCurrencyExposure(
+  preloadedOpenInvoices?: OpenInvoiceForExposure[]
+) {
+  // Bolt ⚡ Optimization: Reuse preloaded open invoices query dataset when available
+  const invoices =
+    preloadedOpenInvoices ??
+    (await prisma.invoice.findMany({
+      where: { status: { in: [...OPEN_FOR_AGG] } },
+      select: {
+        currency: true,
+        grandTotalCents: true,
+        amountPaidCents: true,
+        creditedCents: true,
+        exchangeRate: true,
+      },
+    }));
   const map = new Map<string, { currency: string; localBalanceCents: number; baseBalanceCents: number }>();
   for (const inv of invoices) {
     const bal = balance(inv);
@@ -191,7 +235,11 @@ export async function getCurrencyExposure() {
 export async function getMethodBreakdown() {
   const payments = await prisma.payment.findMany({
     where: { invoice: { status: { notIn: ["VOID"] } } },
-    include: { invoice: { select: { exchangeRate: true } } },
+    select: {
+      method: true,
+      amountCents: true,
+      invoice: { select: { exchangeRate: true } },
+    },
   });
   const map = new Map<string, { method: string; baseCents: number; count: number }>();
   for (const p of payments) {

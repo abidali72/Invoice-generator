@@ -9,21 +9,37 @@ import {
   getMethodBreakdown,
 } from "@/lib/services/reports";
 
+const OPEN_FOR_AGG = ["SENT", "VIEWED", "PARTIALLY_PAID", "OVERDUE"] as const;
+
 /** One-shot dashboard payload (KPIs + aging buckets + charts + recent). */
 export async function GET() {
   return handle(async () => {
-    const [summary, aging, revenue, topClients, exposure, methods, recent] = await Promise.all([
+    // Bolt ⚡ Optimization: Pre-fetch open invoices once using DB index filters
+    // and reuse it across getAging and getCurrencyExposure to avoid duplicate DB queries.
+    const openInvoicesPromise = prisma.invoice.findMany({
+      where: { status: { in: [...OPEN_FOR_AGG] } },
+      include: { client: { select: { name: true } } },
+      orderBy: { dueDate: "asc" },
+    });
+
+    const [summary, openInvoices, revenue, topClients, methods, recent] = await Promise.all([
       getSummary(),
-      getAging(),
+      openInvoicesPromise,
       getMonthlyRevenue(),
       getTopClients(5),
-      getCurrencyExposure(),
       getMethodBreakdown(),
       prisma.invoice.findMany({
         include: { client: { select: { name: true } } },
         orderBy: { createdAt: "desc" },
         take: 8,
       }),
+    ]);
+
+    const now = new Date();
+
+    const [aging, exposure] = await Promise.all([
+      getAging(now, openInvoices),
+      getCurrencyExposure(openInvoices),
     ]);
 
     const bucketTotals: Record<string, number> = {};
