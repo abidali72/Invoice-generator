@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import type { Invoice } from "@prisma/client";
-import { audit } from "@/lib/audit";
+import { audit, auditMany, type AuditEntry } from "@/lib/audit";
 import { formatMoney } from "@/lib/money";
 
 const DAY = 86_400_000;
@@ -82,6 +82,10 @@ export async function dispatchDueReminders(now = new Date()) {
   });
 
   let sent = 0;
+  // Performance optimization: Collect audit entries in memory and batch insert
+  // via auditMany to avoid N sequential database roundtrips inside the loop.
+  const auditEntries: AuditEntry[] = [];
+
   for (const r of pending) {
     if (!OPEN_STATUSES.includes(r.invoice.status)) {
       await prisma.reminder.update({
@@ -94,7 +98,7 @@ export async function dispatchDueReminders(now = new Date()) {
       where: { id: r.id },
       data: { status: "SENT", sentAt: now },
     });
-    await audit({
+    auditEntries.push({
       entityType: "REMINDER",
       entityId: r.id,
       action: "DISPATCH",
@@ -102,6 +106,11 @@ export async function dispatchDueReminders(now = new Date()) {
     });
     sent += 1;
   }
+
+  if (auditEntries.length > 0) {
+    await auditMany(auditEntries);
+  }
+
   return sent;
 }
 
