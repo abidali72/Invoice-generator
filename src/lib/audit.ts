@@ -11,18 +11,20 @@ export type AuditAction =
   | "GENERATE"
   | "DISPATCH";
 
-/**
- * Immutable audit trail writer (doc §3.16 / §15).
- * Never throws into caller flow — auditing must not break business ops.
- */
-export async function audit(entry: {
+export interface AuditEntry {
   entityType: string;
   entityId: string;
   actor?: string;
   action: AuditAction;
   summary: string;
   changes?: unknown;
-}) {
+}
+
+/**
+ * Immutable audit trail writer (doc §3.16 / §15).
+ * Never throws into caller flow — auditing must not break business ops.
+ */
+export async function audit(entry: AuditEntry) {
   try {
     await prisma.auditLog.create({
       data: {
@@ -36,6 +38,28 @@ export async function audit(entry: {
     });
   } catch (err) {
     console.error("[audit] failed to write log", err);
+  }
+}
+
+/**
+ * Batch audit trail writer for bulk operations (e.g. reminder dispatches).
+ * Performance: Reduces N individual database INSERT calls to 1 batch createMany query.
+ */
+export async function auditMany(entries: AuditEntry[]) {
+  if (!entries.length) return;
+  try {
+    await prisma.auditLog.createMany({
+      data: entries.map((entry) => ({
+        entityType: entry.entityType,
+        entityId: entry.entityId,
+        actor: entry.actor ?? "admin@acme.studio",
+        action: entry.action,
+        summary: entry.summary,
+        changesJson: entry.changes != null ? JSON.stringify(entry.changes) : null,
+      })),
+    });
+  } catch (err) {
+    console.error("[audit] failed to write batch logs", err);
   }
 }
 
