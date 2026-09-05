@@ -1,5 +1,6 @@
 import PDFDocument from "pdfkit";
 import { prisma } from "@/lib/prisma";
+import { formatMoney } from "@/lib/money";
 
 const GRAY = "#6b7280";
 const LIGHT = "#f3f4f6";
@@ -26,11 +27,7 @@ interface EntityLike {
 }
 
 function money(cents: number, currency: string) {
-  try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(cents / 100);
-  } catch {
-    return `${currency} ${(cents / 100).toFixed(2)}`;
-  }
+  return formatMoney(cents, currency, "en-US");
 }
 
 const fmtDate = (d: Date) =>
