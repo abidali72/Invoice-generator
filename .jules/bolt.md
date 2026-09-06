@@ -1,0 +1,3 @@
+## 2025-05-20 - Batch Processing in Scheduler Ticks & Audit Trails
+**Learning:** Sequential database updates and audit log writes in queue processing loops (like `dispatchDueReminders`) cause `O(N)` database roundtrips, scaling latency linearly up to 200–400 roundtrips per tick. Grouping status updates with `updateMany` and bulk-inserting audit entries with `auditMany` (`createMany`) reduces database roundtrips to `O(1)` (3 queries per tick).
+**Action:** Always partition batch loop items by operation and use bulk Prisma operations (`updateMany` / `createMany`) alongside `auditMany` when dispatching reminders, processing queues, or writing audit logs in scheduler jobs.

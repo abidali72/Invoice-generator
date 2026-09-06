@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import type { Invoice } from "@prisma/client";
-import { audit } from "@/lib/audit";
+import { audit, auditMany } from "@/lib/audit";
 import { formatMoney } from "@/lib/money";
 
 const DAY = 86_400_000;
@@ -72,7 +72,11 @@ export function adHocContent(invoice: Invoice) {
 
 const OPEN_STATUSES = ["SENT", "VIEWED", "OVERDUE", "PARTIALLY_PAID"];
 
-/** Scheduler tick (doc §13 Reminder Engine). Returns number dispatched. */
+/**
+ * Scheduler tick (doc §13 Reminder Engine). Returns number dispatched.
+ * Performance Optimization: Batches status updates and audit writes into O(1) bulk
+ * operations (`updateMany` and `auditMany`) instead of O(N) sequential database roundtrips.
+ */
 export async function dispatchDueReminders(now = new Date()) {
   const pending = await prisma.reminder.findMany({
     where: { status: "PENDING", scheduledAt: { lte: now } },
@@ -81,28 +85,44 @@ export async function dispatchDueReminders(now = new Date()) {
     take: 200,
   });
 
-  let sent = 0;
+  const cancelledIds: string[] = [];
+  const sentReminders: typeof pending = [];
+
   for (const r of pending) {
     if (!OPEN_STATUSES.includes(r.invoice.status)) {
-      await prisma.reminder.update({
-        where: { id: r.id },
-        data: { status: "CANCELLED" }, // paid/void in the meantime
-      });
-      continue;
+      cancelledIds.push(r.id);
+    } else {
+      sentReminders.push(r);
     }
-    await prisma.reminder.update({
-      where: { id: r.id },
+  }
+
+  // Batch cancel reminders for paid/void invoices
+  if (cancelledIds.length > 0) {
+    await prisma.reminder.updateMany({
+      where: { id: { in: cancelledIds } },
+      data: { status: "CANCELLED" },
+    });
+  }
+
+  // Batch mark reminders as sent and create audit log entries in a single query each
+  if (sentReminders.length > 0) {
+    const sentIds = sentReminders.map((r) => r.id);
+    await prisma.reminder.updateMany({
+      where: { id: { in: sentIds } },
       data: { status: "SENT", sentAt: now },
     });
-    await audit({
-      entityType: "REMINDER",
-      entityId: r.id,
-      action: "DISPATCH",
-      summary: `${r.type} reminder "${r.subject}" e-mailed for ${r.invoice.invoiceNumber}`,
-    });
-    sent += 1;
+
+    await auditMany(
+      sentReminders.map((r) => ({
+        entityType: "REMINDER",
+        entityId: r.id,
+        action: "DISPATCH",
+        summary: `${r.type} reminder "${r.subject}" e-mailed for ${r.invoice.invoiceNumber}`,
+      }))
+    );
   }
-  return sent;
+
+  return sentReminders.length;
 }
 
 export async function cancelPendingReminders(invoiceId: string) {
