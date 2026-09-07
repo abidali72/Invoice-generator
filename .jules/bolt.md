@@ -1,0 +1,3 @@
+## 2026-09-07 - Proportional Financial Allocation Loop Bottleneck
+**Learning:** In monetary allocation algorithms (`allocateProportionally`), spreading integer amounts evenly when weights sum to zero using an iterative `while (rem > 0)` loop leads to an O(total) performance bottleneck (~86ms for $100,000 allocations). Using direct integer arithmetic (`Math.floor` and modulo `%`) reduces time complexity to O(N) items (~0.1ms execution time).
+**Action:** Always compute base allocations and remainders using division and modulo arithmetic rather than step-by-step loop increments for financial distributions.
