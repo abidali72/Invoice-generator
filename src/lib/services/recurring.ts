@@ -3,7 +3,7 @@ import type { RecurringProfile } from "@prisma/client";
 import { addInterval } from "@/lib/dateMath";
 import type { RecurringFrequency } from "@/lib/types";
 import { createInvoice, markSent } from "@/lib/services/invoices";
-import { audit } from "@/lib/audit";
+import { auditMany, type AuditEntry } from "@/lib/audit";
 
 /**
  * Recurring Engine (doc §3.1 / §13).
@@ -35,6 +35,8 @@ export async function runDueProfiles(now = new Date()) {
     let generated = 0;
     let cursor = new Date(profile.nextRunDate);
     let guard = 0;
+    // Batch audit entries to minimize DB queries across catch-up runs
+    const auditEntries: AuditEntry[] = [];
 
     while (
       cursor <= now &&
@@ -63,7 +65,7 @@ export async function runDueProfiles(now = new Date()) {
         },
       });
 
-      await audit({
+      auditEntries.push({
         entityType: "RECURRING_PROFILE",
         entityId: profile.id,
         action: "GENERATE",
@@ -75,6 +77,9 @@ export async function runDueProfiles(now = new Date()) {
       if (exhausted || cursor > now) break;
       guard += 1;
     }
+
+    // Write all audit logs for this profile's run loop in a single batch query
+    await auditMany(auditEntries);
 
     // endDate passed without explicit exhaustion ⇒ auto-deactivate
     if (profile.endDate && profile.endDate < now) {
