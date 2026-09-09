@@ -1,0 +1,3 @@
+## 2026-09-09 - Prisma Select Projections in Aggregation and Report Queries
+**Learning:** Omission of Prisma `select` projections in report and dashboard functions (`getSummary`, `getAging`, `getMonthlyRevenue`, `getTopClients`, `getCurrencyExposure`, `getMethodBreakdown`) causes Prisma to retrieve all model columns (including heavy text and JSON fields like `notes`, `terms`, `customFields`, `poNumber`). For aggregate calculations, fetching unnecessary columns adds overhead in DB query time and memory serialization.
+**Action:** Always specify explicit `select` fields when querying Prisma models for reporting or summary calculations to minimize payload size and database query time.

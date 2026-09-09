@@ -26,9 +26,20 @@ export interface AgingRow {
 
 /** §14 Accounts-Receivable aging across open invoices. */
 export async function getAging(now = new Date()): Promise<AgingRow[]> {
+  // Performance: Select only fields required for aging calculations to avoid over-fetching text/JSON columns
   const invoices = await prisma.invoice.findMany({
     where: { status: { in: [...OPEN_FOR_AGG] } },
-    include: { client: { select: { name: true } } },
+    select: {
+      id: true,
+      invoiceNumber: true,
+      currency: true,
+      grandTotalCents: true,
+      amountPaidCents: true,
+      creditedCents: true,
+      exchangeRate: true,
+      dueDate: true,
+      client: { select: { name: true } },
+    },
     orderBy: { dueDate: "asc" },
   });
   return invoices
@@ -64,7 +75,17 @@ export interface Summary {
 
 /** Dashboard KPIs — all figures in base currency via locked FX snapshots. */
 export async function getSummary(now = new Date()): Promise<Summary> {
-  const allInvoices = await prisma.invoice.findMany();
+  // Performance: Select only fields required for KPI aggregation to avoid loading large text/JSON columns
+  const allInvoices = await prisma.invoice.findMany({
+    select: {
+      status: true,
+      grandTotalCents: true,
+      amountPaidCents: true,
+      creditedCents: true,
+      exchangeRate: true,
+      dueDate: true,
+    },
+  });
 
   let invoiced = 0;
   let paid = 0;
@@ -121,13 +142,23 @@ export interface MonthlyRevenuePoint {
 
 export async function getMonthlyRevenue(monthsBack = 12, now = new Date()) {
   const start = new Date(now.getFullYear(), now.getMonth() - monthsBack + 1, 1);
+  // Performance: Select only fields required for monthly revenue aggregations
   const [invoices, payments] = await Promise.all([
     prisma.invoice.findMany({
       where: { issueDate: { gte: start }, status: { notIn: ["DRAFT", "VOID"] } },
+      select: {
+        issueDate: true,
+        grandTotalCents: true,
+        exchangeRate: true,
+      },
     }),
     prisma.payment.findMany({
       where: { paidAt: { gte: start } },
-      include: { invoice: { select: { exchangeRate: true } } },
+      select: {
+        paidAt: true,
+        amountCents: true,
+        invoice: { select: { exchangeRate: true } },
+      },
     }),
   ]);
 
@@ -153,9 +184,15 @@ function ymOf(d: Date): string {
 }
 
 export async function getTopClients(limit = 5) {
+  // Performance: Select only clientId, totals, FX rate, and client name
   const invoices = await prisma.invoice.findMany({
     where: { status: { notIn: ["DRAFT", "VOID"] } },
-    include: { client: { select: { name: true } } },
+    select: {
+      clientId: true,
+      grandTotalCents: true,
+      exchangeRate: true,
+      client: { select: { name: true } },
+    },
   });
   const agg = new Map<string, { clientId: string; name: string; baseCents: number; count: number }>();
   for (const inv of invoices) {
@@ -169,8 +206,16 @@ export async function getTopClients(limit = 5) {
 }
 
 export async function getCurrencyExposure() {
+  // Performance: Select currency, balance fields, and exchange rate
   const invoices = await prisma.invoice.findMany({
     where: { status: { in: [...OPEN_FOR_AGG] } },
+    select: {
+      currency: true,
+      grandTotalCents: true,
+      amountPaidCents: true,
+      creditedCents: true,
+      exchangeRate: true,
+    },
   });
   const map = new Map<string, { currency: string; localBalanceCents: number; baseBalanceCents: number }>();
   for (const inv of invoices) {
@@ -189,9 +234,14 @@ export async function getCurrencyExposure() {
 }
 
 export async function getMethodBreakdown() {
+  // Performance: Select method, amount, and invoice FX rate
   const payments = await prisma.payment.findMany({
     where: { invoice: { status: { notIn: ["VOID"] } } },
-    include: { invoice: { select: { exchangeRate: true } } },
+    select: {
+      method: true,
+      amountCents: true,
+      invoice: { select: { exchangeRate: true } },
+    },
   });
   const map = new Map<string, { method: string; baseCents: number; count: number }>();
   for (const p of payments) {
