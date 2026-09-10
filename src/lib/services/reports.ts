@@ -203,6 +203,153 @@ export async function getMethodBreakdown() {
   return [...map.values()].sort((a, b) => b.baseCents - a.baseCents);
 }
 
+/**
+ * Single-pass dashboard data aggregation (§14).
+ * Combines summary, aging, revenue, top clients, exposure, and payment methods
+ * to eliminate redundant full table scans on `Invoice` and `Payment`.
+ */
+export async function getDashboardData(monthsBack = 12, topClientsLimit = 5, now = new Date()) {
+  const start = new Date(now.getFullYear(), now.getMonth() - monthsBack + 1, 1);
+
+  const [invoices, payments] = await Promise.all([
+    prisma.invoice.findMany({
+      include: { client: { select: { name: true } } },
+      orderBy: { dueDate: "asc" },
+    }),
+    prisma.payment.findMany({
+      include: { invoice: { select: { status: true, exchangeRate: true } } },
+    }),
+  ]);
+
+  let invoiced = 0;
+  let paid = 0;
+  let creditedTotal = 0;
+  let overdueCount = 0;
+  let overdueVal = 0;
+  const counts: Record<string, number> = {};
+  const forecast = { d30: 0, d60: 0, d90: 0 };
+
+  const agingRows: AgingRow[] = [];
+  const clientAgg = new Map<string, { clientId: string; name: string; baseCents: number; count: number }>();
+  const exposureMap = new Map<string, { currency: string; localBalanceCents: number; baseBalanceCents: number }>();
+
+  const revMap = new Map<string, MonthlyRevenuePoint>();
+  for (let i = 0; i < monthsBack; i++) {
+    const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
+    const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    revMap.set(ym, { ym, invoicedBaseCents: 0, collectedBaseCents: 0 });
+  }
+
+  for (const inv of invoices) {
+    counts[inv.status] = (counts[inv.status] ?? 0) + 1;
+
+    // Aging & Currency Exposure check for open status invoices
+    if ((OPEN_FOR_AGG as readonly string[]).includes(inv.status)) {
+      const bal = balance(inv);
+      if (bal > 0) {
+        const dpd = daysBetween(inv.dueDate, now);
+        const bucket: AgingRow["bucket"] =
+          dpd <= 0 ? "NOT_DUE" : dpd <= 30 ? "0-30" : dpd <= 60 ? "31-60" : dpd <= 90 ? "61-90" : "90+";
+        agingRows.push({
+          invoiceId: inv.id,
+          invoiceNumber: inv.invoiceNumber,
+          clientName: inv.client.name,
+          currency: inv.currency,
+          balanceLocalCents: bal,
+          balanceBaseCents: toBase(bal, inv),
+          daysPastDue: Math.max(0, dpd),
+          bucket,
+        });
+
+        const curExp = exposureMap.get(inv.currency) ?? {
+          currency: inv.currency,
+          localBalanceCents: 0,
+          baseBalanceCents: 0,
+        };
+        curExp.localBalanceCents += bal;
+        curExp.baseBalanceCents += toBase(bal, inv);
+        exposureMap.set(inv.currency, curExp);
+      }
+    }
+
+    if (inv.status === "DRAFT" || inv.status === "VOID") continue;
+
+    // Summary calculations
+    invoiced += toBase(inv.grandTotalCents, inv);
+    paid += toBase(inv.amountPaidCents, inv);
+    creditedTotal += toBase(inv.creditedCents, inv);
+
+    const bal = balance(inv);
+    if (bal > 0) {
+      const balBase = toBase(bal, inv);
+      const dpd = daysBetween(inv.dueDate, now);
+      if (dpd > 0) {
+        overdueCount += 1;
+        overdueVal += balBase;
+      }
+      const daysToDue = -dpd;
+      if (daysToDue <= 30) forecast.d30 += balBase;
+      else if (daysToDue <= 60) forecast.d60 += balBase;
+      else if (daysToDue <= 90) forecast.d90 += balBase;
+    }
+
+    // Monthly revenue (invoiced)
+    if (inv.issueDate >= start) {
+      const pt = revMap.get(ymOf(inv.issueDate));
+      if (pt) pt.invoicedBaseCents += toBase(inv.grandTotalCents, inv);
+    }
+
+    // Top clients aggregation
+    const curClient = clientAgg.get(inv.clientId) ?? {
+      clientId: inv.clientId,
+      name: inv.client.name,
+      baseCents: 0,
+      count: 0,
+    };
+    curClient.baseCents += toBase(inv.grandTotalCents, inv);
+    curClient.count += 1;
+    clientAgg.set(inv.clientId, curClient);
+  }
+
+  // Payments breakdown & monthly revenue (collected)
+  const methodMap = new Map<string, { method: string; baseCents: number; count: number }>();
+  for (const p of payments) {
+    if (p.invoice && p.invoice.status !== "VOID") {
+      const cur = methodMap.get(p.method) ?? { method: p.method, baseCents: 0, count: 0 };
+      cur.baseCents += Math.round(p.amountCents * (p.invoice.exchangeRate ?? 1));
+      cur.count += 1;
+      methodMap.set(p.method, cur);
+
+      if (p.paidAt >= start) {
+        const pt = revMap.get(ymOf(p.paidAt));
+        if (pt) pt.collectedBaseCents += Math.round(p.amountCents * (p.invoice.exchangeRate ?? 1));
+      }
+    }
+  }
+
+  return {
+    summary: {
+      invoicedBaseCents: invoiced,
+      collectedBaseCents: paid,
+      creditedBaseCents: creditedTotal,
+      outstandingBaseCents: Math.max(0, invoiced - paid - creditedTotal),
+      overdueCount,
+      overdueBaseCents: overdueVal,
+      countsByStatus: counts,
+      cashflowForecast: [
+        { withinDays: "Next 30 days", baseCents: forecast.d30 },
+        { withinDays: "Days 31–60", baseCents: forecast.d60 },
+        { withinDays: "Days 61–90", baseCents: forecast.d90 },
+      ],
+    },
+    aging: agingRows,
+    revenue: [...revMap.values()],
+    topClients: [...clientAgg.values()].sort((a, b) => b.baseCents - a.baseCents).slice(0, topClientsLimit),
+    exposure: [...exposureMap.values()].sort((a, b) => b.baseBalanceCents - a.baseBalanceCents),
+    methods: [...methodMap.values()].sort((a, b) => b.baseCents - a.baseCents),
+  };
+}
+
 /* ────────────────────────────── CSV exports ─────────────────────────────── */
 
 function csvEscape(v: unknown): string {

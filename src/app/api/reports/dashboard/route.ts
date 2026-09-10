@@ -1,30 +1,20 @@
 import { prisma } from "@/lib/prisma";
 import { handle, ok } from "@/lib/api";
-import {
-  getSummary,
-  getAging,
-  getMonthlyRevenue,
-  getTopClients,
-  getCurrencyExposure,
-  getMethodBreakdown,
-} from "@/lib/services/reports";
+import { getDashboardData } from "@/lib/services/reports";
 
 /** One-shot dashboard payload (KPIs + aging buckets + charts + recent). */
 export async function GET() {
   return handle(async () => {
-    const [summary, aging, revenue, topClients, exposure, methods, recent] = await Promise.all([
-      getSummary(),
-      getAging(),
-      getMonthlyRevenue(),
-      getTopClients(5),
-      getCurrencyExposure(),
-      getMethodBreakdown(),
+    const [dashData, recent] = await Promise.all([
+      getDashboardData(12, 5),
       prisma.invoice.findMany({
         include: { client: { select: { name: true } } },
         orderBy: { createdAt: "desc" },
         take: 8,
       }),
     ]);
+
+    const { summary, aging, revenue, topClients, exposure, methods } = dashData;
 
     const bucketTotals: Record<string, number> = {};
     for (const r of aging) bucketTotals[r.bucket] = (bucketTotals[r.bucket] ?? 0) + r.balanceBaseCents;
