@@ -39,6 +39,31 @@ export async function audit(entry: {
   }
 }
 
+export async function auditMany(entries: Array<{
+  entityType: string;
+  entityId: string;
+  actor?: string;
+  action: AuditAction;
+  summary: string;
+  changes?: unknown;
+}>) {
+  if (!entries.length) return;
+  try {
+    await prisma.auditLog.createMany({
+      data: entries.map((entry) => ({
+        entityType: entry.entityType,
+        entityId: entry.entityId,
+        actor: entry.actor ?? "admin@acme.studio",
+        action: entry.action,
+        summary: entry.summary,
+        changesJson: entry.changes != null ? JSON.stringify(entry.changes) : null,
+      })),
+    });
+  } catch (err) {
+    console.error("[auditMany] failed to write logs", err);
+  }
+}
+
 /** Shallow JSON-diff of before/after objects for UPDATE entries. */
 export function diff(before: Record<string, unknown>, after: Record<string, unknown>) {
   const out: Record<string, { from: unknown; to: unknown }> = {};

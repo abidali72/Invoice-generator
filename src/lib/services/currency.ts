@@ -2,8 +2,12 @@ import { prisma } from "@/lib/prisma";
 import { CURRENCY_CATALOG } from "@/lib/types";
 
 /** Live look-up with catalog fallback; returned value is snapshotted onto invoices. */
-export async function resolveExchangeRate(code: string): Promise<number> {
+export async function resolveExchangeRate(
+  code: string,
+  ratesMap?: Map<string, number>
+): Promise<number> {
   const upper = code.toUpperCase();
+  if (ratesMap && ratesMap.has(upper)) return ratesMap.get(upper)!;
   const row = await prisma.currencyRate.findUnique({ where: { code: upper } });
   if (row) return row.rateToBase;
   if (upper === "USD") return 1;
