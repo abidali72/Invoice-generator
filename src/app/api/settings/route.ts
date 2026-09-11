@@ -3,9 +3,11 @@ import { z } from "zod";
 import { prisma, getEntity } from "@/lib/prisma";
 import { handle, ok } from "@/lib/api";
 import { audit } from "@/lib/audit";
+import { verifyAuth } from "@/lib/auth";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   return handle(async () => {
+    verifyAuth(req);
     const entity = await getEntity();
     return ok(entity);
   });
@@ -29,8 +31,9 @@ const schema = z.object({
 });
 
 export async function PUT(req: NextRequest) {
-  const body = await req.json();
   return handle(async () => {
+    verifyAuth(req);
+    const body = await req.json();
     const entity = await getEntity();
     const d = schema.parse(body);
     const updated = await prisma.entity.update({
