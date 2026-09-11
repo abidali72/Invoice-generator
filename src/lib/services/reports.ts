@@ -64,7 +64,16 @@ export interface Summary {
 
 /** Dashboard KPIs — all figures in base currency via locked FX snapshots. */
 export async function getSummary(now = new Date()): Promise<Summary> {
-  const allInvoices = await prisma.invoice.findMany();
+  const allInvoices = await prisma.invoice.findMany({
+    select: {
+      status: true,
+      grandTotalCents: true,
+      amountPaidCents: true,
+      creditedCents: true,
+      exchangeRate: true,
+      dueDate: true,
+    },
+  });
 
   let invoiced = 0;
   let paid = 0;
