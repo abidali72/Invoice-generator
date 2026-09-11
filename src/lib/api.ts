@@ -36,7 +36,6 @@ export async function handle<T>(fn: () => Promise<Response>): Promise<Response> 
       );
     }
     console.error("[api]", err);
-    const message = err instanceof Error ? err.message : "Internal error";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return NextResponse.json({ ok: false, error: "Internal server error" }, { status: 500 });
   }
 }
