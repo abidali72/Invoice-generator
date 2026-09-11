@@ -81,28 +81,43 @@ export async function dispatchDueReminders(now = new Date()) {
     take: 200,
   });
 
-  let sent = 0;
+  const cancelledIds: string[] = [];
+  const sentReminders: typeof pending = [];
+
   for (const r of pending) {
     if (!OPEN_STATUSES.includes(r.invoice.status)) {
-      await prisma.reminder.update({
-        where: { id: r.id },
-        data: { status: "CANCELLED" }, // paid/void in the meantime
-      });
-      continue;
+      cancelledIds.push(r.id);
+    } else {
+      sentReminders.push(r);
     }
-    await prisma.reminder.update({
-      where: { id: r.id },
+  }
+
+  if (cancelledIds.length > 0) {
+    await prisma.reminder.updateMany({
+      where: { id: { in: cancelledIds } },
+      data: { status: "CANCELLED" },
+    });
+  }
+
+  if (sentReminders.length > 0) {
+    await prisma.reminder.updateMany({
+      where: { id: { in: sentReminders.map((r) => r.id) } },
       data: { status: "SENT", sentAt: now },
     });
-    await audit({
-      entityType: "REMINDER",
-      entityId: r.id,
-      action: "DISPATCH",
-      summary: `${r.type} reminder "${r.subject}" e-mailed for ${r.invoice.invoiceNumber}`,
-    });
-    sent += 1;
+
+    await Promise.all(
+      sentReminders.map((r) =>
+        audit({
+          entityType: "REMINDER",
+          entityId: r.id,
+          action: "DISPATCH",
+          summary: `${r.type} reminder "${r.subject}" e-mailed for ${r.invoice.invoiceNumber}`,
+        })
+      )
+    );
   }
-  return sent;
+
+  return sentReminders.length;
 }
 
 export async function cancelPendingReminders(invoiceId: string) {
