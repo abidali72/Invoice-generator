@@ -1,5 +1,5 @@
 import { prisma, getEntity } from "@/lib/prisma";
-import type { Invoice } from "@prisma/client";
+import type { Invoice, Entity, Client, TaxRate } from "@prisma/client";
 import { computeInvoice, toCents } from "@/lib/money";
 import type { TaxTypeT, DiscountType } from "@/lib/types";
 import { resolveExchangeRate } from "@/lib/services/currency";
@@ -44,14 +44,30 @@ export interface InvoiceInput {
   recurringProfileId?: string | null;
 }
 
+export interface CreateInvoiceOptions {
+  entity?: Entity;
+  client?: Client;
+  taxRatesMap?: Map<string, TaxRate>;
+  exchangeRatesMap?: Map<string, number>;
+}
+
 /* ────────────────────────────── internal plumbing ───────────────────────── */
 
-async function resolveItems(entityId: string, inputs: ItemInput[]) {
+async function resolveItems(
+  entityId: string,
+  inputs: ItemInput[],
+  taxRatesMap?: Map<string, TaxRate>
+) {
   if (!inputs.length) throw new ApiError(400, "At least one line item is required.");
   const rateIds = [...new Set(inputs.map((i) => i.taxRateId).filter(Boolean))] as string[];
-  const taxRates = rateIds.length
-    ? await prisma.taxRate.findMany({ where: { id: { in: rateIds }, entityId } })
-    : [];
+  let taxRates: TaxRate[];
+  if (taxRatesMap && rateIds.every((id) => taxRatesMap.has(id))) {
+    taxRates = rateIds.map((id) => taxRatesMap.get(id)!);
+  } else {
+    taxRates = rateIds.length
+      ? await prisma.taxRate.findMany({ where: { id: { in: rateIds }, entityId } })
+      : [];
+  }
   const rateMap = new Map(taxRates.map((t) => [t.id, t]));
 
   return inputs.map((it) => {
@@ -106,18 +122,24 @@ type ResolvedItem = Awaited<ReturnType<typeof resolveItems>>[number];
 
 /* ────────────────────────────── lifecycle ops ───────────────────────────── */
 
-export async function createInvoice(input: InvoiceInput): Promise<Invoice> {
-  const entity = await getEntity();
-  const client = await prisma.client.findFirst({
-    where: { id: input.clientId, entityId: entity.id },
-  });
+export async function createInvoice(
+  input: InvoiceInput,
+  options?: CreateInvoiceOptions
+): Promise<Invoice> {
+  const entity = options?.entity ?? (await getEntity());
+  let client: Client | null | undefined = options?.client;
+  if (!client || client.id !== input.clientId) {
+    client = await prisma.client.findFirst({
+      where: { id: input.clientId, entityId: entity.id },
+    });
+  }
   if (!client) throw new ApiError(404, "Client not found.");
 
   const currency = (input.currency || entity.defaultCurrency).toUpperCase();
   // doc §12: FX snapshot locked at creation, immutable afterwards
-  const exchangeRate = await resolveExchangeRate(currency);
+  const exchangeRate = await resolveExchangeRate(currency, options?.exchangeRatesMap);
 
-  const resolved = await resolveItems(entity.id, input.items);
+  const resolved = await resolveItems(entity.id, input.items, options?.taxRatesMap);
   const calc = calcFromResolved(resolved, input.discountType, input.discountValue);
 
   const issueDate = input.issueDate ? new Date(input.issueDate) : new Date();
@@ -235,18 +257,18 @@ export async function requireInvoice(id: string): Promise<Invoice> {
   return inv;
 }
 
-export async function markSent(id: string) {
-  const inv = await requireInvoice(id);
+export async function markSent(idOrInvoice: string | Invoice) {
+  const inv = typeof idOrInvoice === "string" ? await requireInvoice(idOrInvoice) : idOrInvoice;
   if (inv.status !== "DRAFT")
     throw new ApiError(409, `Cannot send an invoice already ${inv.status}.`);
   const updated = await prisma.invoice.update({
-    where: { id },
+    where: { id: inv.id },
     data: { status: "SENT", sentAt: new Date() },
   });
   await ensureScheduleForSentInvoice(updated); // doc §3.9 schedule engine
   await audit({
     entityType: "INVOICE",
-    entityId: id,
+    entityId: inv.id,
     action: "SEND",
     summary: `${updated.invoiceNumber} e-mailed to client`,
   });
