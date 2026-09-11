@@ -26,24 +26,43 @@ export async function GET() {
       }),
     ]);
 
-    const bucketTotals: Record<string, number> = {};
-    for (const r of aging) bucketTotals[r.bucket] = (bucketTotals[r.bucket] ?? 0) + r.balanceBaseCents;
+    // Performance Optimization (⚡ Bolt):
+    // Perform a single pass O(N) over `aging` to compute bucket totals/counts and `dueSoon`.
+    // Avoids 6 separate passes and intermediate array allocations from multiple .filter() calls.
+    const BUCKETS = ["NOT_DUE", "0-30", "31-60", "61-90", "90+"] as const;
+    const bucketStats: Record<string, { baseCents: number; count: number }> = {
+      NOT_DUE: { baseCents: 0, count: 0 },
+      "0-30": { baseCents: 0, count: 0 },
+      "31-60": { baseCents: 0, count: 0 },
+      "61-90": { baseCents: 0, count: 0 },
+      "90+": { baseCents: 0, count: 0 },
+    };
+
+    const dueSoon: typeof aging = [];
+    for (const r of aging) {
+      const stat = bucketStats[r.bucket];
+      if (stat) {
+        stat.baseCents += r.balanceBaseCents;
+        stat.count += 1;
+      }
+      if (r.daysPastDue <= 7) {
+        dueSoon.push(r);
+      }
+    }
 
     return ok({
       summary,
-      buckets: ["NOT_DUE", "0-30", "31-60", "61-90", "90+"].map((b) => ({
+      buckets: BUCKETS.map((b) => ({
         bucket: b,
-        baseCents: bucketTotals[b] ?? 0,
-        count: aging.filter((r) => r.bucket === b).length,
+        baseCents: bucketStats[b]?.baseCents ?? 0,
+        count: bucketStats[b]?.count ?? 0,
       })),
       revenue,
       topClients,
       exposure,
       methods,
       recent,
-      dueSoon: aging
-        .filter((r) => r.daysPastDue <= 7)
-        .slice(0, 6),
+      dueSoon: dueSoon.slice(0, 6),
     });
   });
 }
