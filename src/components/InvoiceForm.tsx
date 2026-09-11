@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Trash2, Plus } from "lucide-react";
 import { apiFetch } from "@/lib/hooks";
 import { computeInvoice, formatMoney } from "@/lib/money";
-import type { DiscountType } from "@/lib/types";
+import type { DiscountType, TaxType } from "@/lib/types";
 import { ErrorBanner } from "@/components/ui";
 
 export interface ClientOpt { id: string; name: string; currency: string }
@@ -14,7 +14,7 @@ export interface ProductOpt {
   unitPriceCents: number; taxRateId: string | null;
   active?: boolean;
 }
-export interface TaxOpt { id: string; name: string; ratePercent: number; type: string }
+export interface TaxOpt { id: string; name: string; ratePercent: number; type: TaxType }
 
 export interface FormLine {
   productId: string;
@@ -62,7 +62,6 @@ export function InvoiceForm({
   const client = clients.find((c) => c.id === clientId);
   const currency = client?.currency ?? "USD";
 
-  /* eslint-disable @typescript-eslint/no-explicit-any */
   const preview = useMemo(() => {
     return computeInvoice(
       lines.map((l) => {
@@ -71,15 +70,14 @@ export function InvoiceForm({
           quantity: parseFloat(l.quantity) || 0,
           unitPriceCents: Math.round((parseFloat(l.unitPrice.replace(/,/g, "")) || 0) * 100),
           taxRatePercent: tr?.ratePercent ?? 0,
-          taxType: (tr?.type ?? "EXCLUSIVE") as any,
+          taxType: tr?.type ?? "EXCLUSIVE",
         };
       }),
       discountType && discountValue !== ""
-        ? { type: discountType as any, value: parseFloat(discountValue) || 0 }
+        ? { type: discountType, value: parseFloat(discountValue) || 0 }
         : { type: null, value: null }
     );
   }, [lines, discountType, discountValue, taxRates]);
-  /* eslint-enable @typescript-eslint/no-explicit-any */
 
   function updateLine(i: number, patch: Partial<FormLine>) {
     setLines((ls) => ls.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
