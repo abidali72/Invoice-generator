@@ -1,7 +1,7 @@
 "use client";
 
 import { useApi } from "@/lib/hooks";
-import { formatMoney, centsToDecimalString } from "@/lib/money";
+import { formatMoney } from "@/lib/money";
 import { SimpleCrud } from "@/components/SimpleCrud";
 import type { CrudColumn, CrudField } from "@/components/SimpleCrud";
 
@@ -30,8 +30,7 @@ export default function ProductsPage() {
     { key: "description", label: "Description", kind: "textarea", span: 2 },
   ];
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const columns: CrudColumn<any>[] = [
+  const columns: CrudColumn<ProductRow>[] = [
     { key: "name", header: "Product / Service", render: (r) => (
         <span className={`font-semibold ${r.active ? "text-slate-800" : "text-slate-400 line-through"}`}>{r.name}</span>
       ) },
