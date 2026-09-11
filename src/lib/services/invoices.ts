@@ -104,6 +104,72 @@ function itemRows(invoiceId: string, resolved: ResolvedItem[], calc: ReturnType<
 
 type ResolvedItem = Awaited<ReturnType<typeof resolveItems>>[number];
 
+function resolveInvoiceDates(issueDateInput?: string | Date, dueDateInput?: string | Date) {
+  const issueDate = issueDateInput ? new Date(issueDateInput) : new Date();
+  const dueDate = dueDateInput
+    ? new Date(dueDateInput)
+    : new Date(issueDate.getTime() + 30 * DAY);
+  return { issueDate, dueDate };
+}
+
+interface CreateInvoiceRecordParams {
+  entity: Awaited<ReturnType<typeof getEntity>>;
+  clientId: string;
+  issueDate: Date;
+  dueDate: Date;
+  currency: string;
+  exchangeRate: number;
+  discountType: DiscountType | null;
+  discountValue: number | null;
+  calc: ReturnType<typeof computeInvoice>;
+  notes: string | null;
+  terms: string | null;
+  poNumber: string | null;
+  recurringProfileId: string | null;
+}
+
+async function createInvoiceRecordWithRetry(
+  params: CreateInvoiceRecordParams,
+  maxAttempts = 4
+): Promise<Invoice> {
+  const year = params.issueDate.getFullYear();
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const { sequence, invoiceNumber } = await nextInvoiceNumber(params.entity, year);
+      return await prisma.invoice.create({
+        data: {
+          entityId: params.entity.id,
+          clientId: params.clientId,
+          invoiceNumber,
+          sequence,
+          status: "DRAFT",
+          issueDate: params.issueDate,
+          dueDate: params.dueDate,
+          currency: params.currency,
+          exchangeRate: params.exchangeRate,
+          discountType: params.discountType,
+          discountValue: params.discountValue,
+          subtotalCents: params.calc.subtotalCents,
+          discountTotalCents: params.calc.discountTotalCents,
+          taxTotalCents: params.calc.taxTotalCents,
+          grandTotalCents: params.calc.grandTotalCents,
+          notes: params.notes,
+          terms: params.terms,
+          poNumber: params.poNumber,
+          recurringProfileId: params.recurringProfileId,
+        },
+      });
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e);
+      if (!msg.includes("Unique constraint")) throw e;
+      if (attempt === maxAttempts - 1) {
+        throw new ApiError(500, "Could not allocate invoice number.");
+      }
+    }
+  }
+  throw new ApiError(500, "Could not allocate invoice number.");
+}
+
 /* ────────────────────────────── lifecycle ops ───────────────────────────── */
 
 export async function createInvoice(input: InvoiceInput): Promise<Invoice> {
@@ -119,46 +185,23 @@ export async function createInvoice(input: InvoiceInput): Promise<Invoice> {
 
   const resolved = await resolveItems(entity.id, input.items);
   const calc = calcFromResolved(resolved, input.discountType, input.discountValue);
+  const { issueDate, dueDate } = resolveInvoiceDates(input.issueDate, input.dueDate);
 
-  const issueDate = input.issueDate ? new Date(input.issueDate) : new Date();
-  const dueDate = input.dueDate
-    ? new Date(input.dueDate)
-    : new Date(issueDate.getTime() + 30 * DAY);
-
-  let created!: Invoice;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      const { sequence, invoiceNumber } = await nextInvoiceNumber(entity, issueDate.getFullYear());
-      created = await prisma.invoice.create({
-        data: {
-          entityId: entity.id,
-          clientId: client.id,
-          invoiceNumber,
-          sequence,
-          status: "DRAFT",
-          issueDate,
-          dueDate,
-          currency,
-          exchangeRate,
-          discountType: input.discountType ?? null,
-          discountValue: input.discountValue ?? null,
-          subtotalCents: calc.subtotalCents,
-          discountTotalCents: calc.discountTotalCents,
-          taxTotalCents: calc.taxTotalCents,
-          grandTotalCents: calc.grandTotalCents,
-          notes: input.notes ?? entity.defaultNotes,
-          terms: input.terms ?? entity.defaultTerms,
-          poNumber: input.poNumber ?? null,
-          recurringProfileId: input.recurringProfileId ?? null,
-        },
-      });
-      break;
-    } catch (e) {
-      const msg = String((e as Error)?.message ?? e);
-      if (!msg.includes("Unique constraint")) throw e;
-      if (attempt === 3) throw new ApiError(500, "Could not allocate invoice number.");
-    }
-  }
+  const created = await createInvoiceRecordWithRetry({
+    entity,
+    clientId: client.id,
+    issueDate,
+    dueDate,
+    currency,
+    exchangeRate,
+    discountType: input.discountType ?? null,
+    discountValue: input.discountValue ?? null,
+    calc,
+    notes: input.notes ?? entity.defaultNotes,
+    terms: input.terms ?? entity.defaultTerms,
+    poNumber: input.poNumber ?? null,
+    recurringProfileId: input.recurringProfileId ?? null,
+  });
 
   await prisma.invoiceItem.createMany({ data: itemRows(created.id, resolved, calc) });
 
