@@ -19,8 +19,17 @@ export async function GET() {
       getTopClients(5),
       getCurrencyExposure(),
       getMethodBreakdown(),
+      // Optimization: explicitly select fields needed for recent invoice table display
       prisma.invoice.findMany({
-        include: { client: { select: { name: true } } },
+        select: {
+          id: true,
+          invoiceNumber: true,
+          status: true,
+          grandTotalCents: true,
+          currency: true,
+          dueDate: true,
+          client: { select: { name: true } },
+        },
         orderBy: { createdAt: "desc" },
         take: 8,
       }),
