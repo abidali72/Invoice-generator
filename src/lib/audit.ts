@@ -39,6 +39,37 @@ export async function audit(entry: {
   }
 }
 
+/**
+ * Batch writer for audit trail entries.
+ * Avoids N queries when logging multiple actions at once.
+ */
+export async function auditMany(
+  entries: Array<{
+    entityType: string;
+    entityId: string;
+    actor?: string;
+    action: AuditAction;
+    summary: string;
+    changes?: unknown;
+  }>
+) {
+  if (!entries.length) return;
+  try {
+    await prisma.auditLog.createMany({
+      data: entries.map((e) => ({
+        entityType: e.entityType,
+        entityId: e.entityId,
+        actor: e.actor ?? "admin@acme.studio",
+        action: e.action,
+        summary: e.summary,
+        changesJson: e.changes != null ? JSON.stringify(e.changes) : null,
+      })),
+    });
+  } catch (err) {
+    console.error("[auditMany] failed to write logs", err);
+  }
+}
+
 /** Shallow JSON-diff of before/after objects for UPDATE entries. */
 export function diff(before: Record<string, unknown>, after: Record<string, unknown>) {
   const out: Record<string, { from: unknown; to: unknown }> = {};
