@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import type { Invoice } from "@prisma/client";
-import { audit } from "@/lib/audit";
+import { auditMany } from "@/lib/audit";
 import { formatMoney } from "@/lib/money";
 
 const DAY = 86_400_000;
@@ -81,28 +81,48 @@ export async function dispatchDueReminders(now = new Date()) {
     take: 200,
   });
 
-  let sent = 0;
+  const cancelledIds: string[] = [];
+  const sentIds: string[] = [];
+  const auditEntries: Array<{
+    entityType: string;
+    entityId: string;
+    action: "DISPATCH";
+    summary: string;
+  }> = [];
+
   for (const r of pending) {
     if (!OPEN_STATUSES.includes(r.invoice.status)) {
-      await prisma.reminder.update({
-        where: { id: r.id },
-        data: { status: "CANCELLED" }, // paid/void in the meantime
+      cancelledIds.push(r.id);
+    } else {
+      sentIds.push(r.id);
+      auditEntries.push({
+        entityType: "REMINDER",
+        entityId: r.id,
+        action: "DISPATCH",
+        summary: `${r.type} reminder "${r.subject}" e-mailed for ${r.invoice.invoiceNumber}`,
       });
-      continue;
     }
-    await prisma.reminder.update({
-      where: { id: r.id },
-      data: { status: "SENT", sentAt: now },
-    });
-    await audit({
-      entityType: "REMINDER",
-      entityId: r.id,
-      action: "DISPATCH",
-      summary: `${r.type} reminder "${r.subject}" e-mailed for ${r.invoice.invoiceNumber}`,
-    });
-    sent += 1;
   }
-  return sent;
+
+  // Batch updates and audit logs to avoid sequential N+1 database queries.
+  // Performance impact: reduces DB write queries from ~2N (up to 400) down to ~3 bulk operations.
+  await Promise.all([
+    cancelledIds.length
+      ? prisma.reminder.updateMany({
+          where: { id: { in: cancelledIds } },
+          data: { status: "CANCELLED" },
+        })
+      : Promise.resolve(),
+    sentIds.length
+      ? prisma.reminder.updateMany({
+          where: { id: { in: sentIds } },
+          data: { status: "SENT", sentAt: now },
+        })
+      : Promise.resolve(),
+    auditMany(auditEntries),
+  ]);
+
+  return sentIds.length;
 }
 
 export async function cancelPendingReminders(invoiceId: string) {
