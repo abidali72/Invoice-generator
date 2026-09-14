@@ -26,9 +26,20 @@ export interface AgingRow {
 
 /** §14 Accounts-Receivable aging across open invoices. */
 export async function getAging(now = new Date()): Promise<AgingRow[]> {
+  // Optimization: Select only required fields to avoid reading heavy unused columns (notes, terms, customFields)
   const invoices = await prisma.invoice.findMany({
     where: { status: { in: [...OPEN_FOR_AGG] } },
-    include: { client: { select: { name: true } } },
+    select: {
+      id: true,
+      invoiceNumber: true,
+      currency: true,
+      dueDate: true,
+      grandTotalCents: true,
+      amountPaidCents: true,
+      creditedCents: true,
+      exchangeRate: true,
+      client: { select: { name: true } },
+    },
     orderBy: { dueDate: "asc" },
   });
   return invoices
@@ -64,7 +75,17 @@ export interface Summary {
 
 /** Dashboard KPIs — all figures in base currency via locked FX snapshots. */
 export async function getSummary(now = new Date()): Promise<Summary> {
-  const allInvoices = await prisma.invoice.findMany();
+  // Optimization: Select only status, monetary totals, dates, and exchange rate for dashboard KPI aggregation
+  const allInvoices = await prisma.invoice.findMany({
+    select: {
+      status: true,
+      grandTotalCents: true,
+      amountPaidCents: true,
+      creditedCents: true,
+      dueDate: true,
+      exchangeRate: true,
+    },
+  });
 
   let invoiced = 0;
   let paid = 0;
@@ -153,9 +174,15 @@ function ymOf(d: Date): string {
 }
 
 export async function getTopClients(limit = 5) {
+  // Optimization: Select only clientId, totals, FX rate, and client name
   const invoices = await prisma.invoice.findMany({
     where: { status: { notIn: ["DRAFT", "VOID"] } },
-    include: { client: { select: { name: true } } },
+    select: {
+      clientId: true,
+      grandTotalCents: true,
+      exchangeRate: true,
+      client: { select: { name: true } },
+    },
   });
   const agg = new Map<string, { clientId: string; name: string; baseCents: number; count: number }>();
   for (const inv of invoices) {
@@ -169,8 +196,16 @@ export async function getTopClients(limit = 5) {
 }
 
 export async function getCurrencyExposure() {
+  // Optimization: Select only currency, totals, and FX rate for exposure report
   const invoices = await prisma.invoice.findMany({
     where: { status: { in: [...OPEN_FOR_AGG] } },
+    select: {
+      currency: true,
+      grandTotalCents: true,
+      amountPaidCents: true,
+      creditedCents: true,
+      exchangeRate: true,
+    },
   });
   const map = new Map<string, { currency: string; localBalanceCents: number; baseBalanceCents: number }>();
   for (const inv of invoices) {
