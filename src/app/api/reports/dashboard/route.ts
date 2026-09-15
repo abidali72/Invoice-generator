@@ -26,15 +26,20 @@ export async function GET() {
       }),
     ]);
 
+    // Single-pass aggregation of total base balance and counts per aging bucket to avoid O(5N) re-filtering.
     const bucketTotals: Record<string, number> = {};
-    for (const r of aging) bucketTotals[r.bucket] = (bucketTotals[r.bucket] ?? 0) + r.balanceBaseCents;
+    const bucketCounts: Record<string, number> = {};
+    for (const r of aging) {
+      bucketTotals[r.bucket] = (bucketTotals[r.bucket] ?? 0) + r.balanceBaseCents;
+      bucketCounts[r.bucket] = (bucketCounts[r.bucket] ?? 0) + 1;
+    }
 
     return ok({
       summary,
       buckets: ["NOT_DUE", "0-30", "31-60", "61-90", "90+"].map((b) => ({
         bucket: b,
         baseCents: bucketTotals[b] ?? 0,
-        count: aging.filter((r) => r.bucket === b).length,
+        count: bucketCounts[b] ?? 0,
       })),
       revenue,
       topClients,
